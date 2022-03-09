@@ -1,0 +1,129 @@
+**Working Title**
+
+Introduction
+===
+
+This is a description of the project I've been working on in 2021. In short, it is a personal effort to write a real-time 3D graphics engine from scratch, and to investigate some techniques I found interesting. Mostly it was done for learning purposes, with the added bonus of hopefully looking good on the resume.
+
+![The classic Sponza mesh. No "fake" indirect light was used in the making of any screenshots](scene_sponza.jpg)
+![A randomly-generated 3D maze](scene_128.jpg)
+
+The project was written in (a constrained subset of) C++, and GLSL for shaders. It uses the Vulkan API to interface with graphics hardware. The source code is currently closed, although I will share it, if you have a reason to request it. It currently compiles under MSVC into x64 Windows executables, and is around 25 thousand lines of code. 
+
+It also uses some helper libraries:
+* [GLM](http://glm.g-truc.net/) for vector math.
+* [GLFW](https://www.glfw.org/) for windowing needs.
+* [Dear ImGui](https://github.com/ocornut/imgui) for UI.
+* [STB](https://github.com/nothings/stb) for working with image formats.
+* [Tracy](https://github.com/wolfpld/tracy) for profiling.
+* [tinygltf](https://github.com/syoyo/tinygltf) to work with the GLTF format.
+
+Overview
+===
+
+Here's a rough list of what is in the project, technically speaking:
+- Deferred shading pipeline
+- Cook-Torrance direct light model
+- Indirect lighting via real-time ray casting from probes
+- Post-processing with HDR, TAA, and motion blur
+- Multithreading-first architecture based on tasks and resources
+- ImGui integration and debug tools
+- CSG generation with Dual Cuboids
+
+Deferred lighting
+----
+This is fairly straightforward. First, there's a Z prepass, which is cheap and serves to determine which opaque surface is closest to the camera at each pixel. Then comes a full geometry pass, which is more expensive (mostly regarding memory bandwidth). It reads texture data and outputs 3 GBuffer channels: RGBA16, RGBA8, RGBA8. The resulting GBuffer encodes surface properties: base color, world-space normals (with the per-pixel normal map applied), "metallic-ness", and roughness.
+Then, for each light source, we compute the amount of outgoing light at each pixel, and use additive linear blending. After all of them are done, we get a RGBA16 radiance buffer, which is then used by postprocessing to get the final image. The light sources currently set up are:
+directional light sources (i.e. sun), emissive skybox, indirect light via probes (see more below).
+
+![An example test scene](csg_scene.jpg)
+
+Light model
+----
+For direct shading computations, the Cook-Torrance model is used for the specular component,
+with GGX distribution (D), Smith shadowing (G), and Schlick Fresnel term (F).
+Inputs are the base color, "metallic-ness", per-pixel "perceptual" normals, and roughness.
+Only opaque geometry is supported. Diffuse component is considered uniform.
+
+Indirect light
+----
+This began as an attempt to implement [DDGI](https://jcgt.org/published/0008/02/01/) as is,
+but in the process of making it work with the (limited) assets I had, I had to make some choices differently:
+- Probe grid is larger, with sizes up to 64x64x64 times 8 cascades.
+- Probe grid is updated sparsely (more on that below)
+- No distance information was stored for probes, only radiance. It hurt memory usage and bandwidth, and thus performance. It was also very hard to tune, produced artifacts, and ultimately seemed to bring only minor improvements.
+- Radiance was stored in a 8x8 subtexture per probe (with 1 mirroing pixel for the border, thus yielding a 7x7 rectangle of unique data points.
+- As an added experiment, a "stability" value was added to each probe, with the idea of computing stable probes less often.
+- The cascades were most commonly set up as a 8 level structure, with 2x scale between the levels, thus achieving a 128-times range between the bottom and top levels.
+
+![Indirect light on](indirect_on.jpg)
+![Indirect light off](indirect_off.png)
+
+Sparse update
+----
+To achieve sparse updates, the indirect light workload was separated into three distict steps, tentatively called "appoint", "collect" and "measure" respectively. Also, whenever the probe data structure was read (i.e. in the pass calculating the indirect light contribution to the actual GBuffer geometry), a "true" / 1 value was written to a location corresponding to the probe. This meant that the probe had "attention" and we would do heavy work in the next frame.
+
+The "appoint" step is a compute shader going over all the probe grid, checking for "attention" and writing the relevant probe coordinates into a queue. The "collect" step is a compute shader going over all of the queue, casting actual rays, and collecting the hit distance and geometry data into a "sort-of-a-GBuffer". Then, the "measure" step calculated the contribution of all relevant light sources (including the last frame's information of the indirect probe grid itself!), and blending the result into a per-probe radiance texture.
+
+All this means that if very few probes were actually used for the current scene, the workload was also insignificant. This scales pretty much linearly, and together with the "stability" value which allowed to skip even the relevant probes' work, this meant that much larger grid sizes (and thus quality) was possible than in vanilla DDGI.
+
+![Cascades in action, with very far and very near indirect light](gi_cascades.png)
+![Skybox and a color surface giving a non-uniform GI color to the vertical plane](gi_color.png)
+![Multiple bounces. The light comes from a source above, and is fully blocked by the top two layers](gi_bounces.png)
+
+Post processing
+----
+By contrast, this is rather mundane. First, a fullscreen pass does a combination of TAA, tone mapping, and Motion Blur. TAA uses reprojection from the previous frame, with variance clipping to prevent major ghosting artifacts. Tone mapping uses a moving average of luminance from the previous frames to choose a midpoint, and then uses simple Reinhard mapping to output display brightness values. Motion Blur essentially gathers samples in the direction opposite to camera movement (object velocity buffer was left for later, i.e. never).
+
+![TAA comparison](taa_flower.jpg)
+![Camera-based motion blur](motion_blur.png)
+
+Multithreading
+----
+A custom task-based system was used to experiment with multithreading. The core idea was to make a thread for each logical processor core (or however many is optimal for the system), and to treat them as equal "workers". A task queue (or rather, several, ranked by priority) is then used to dispatch tasks to workers, implmented by a single global mutex. This was done for simplicity at first, and I feared it would be too expensive once the engine scaled up, but essentially, even this setup could handle 10^5 - 10^6 tasks per second, which was way more than I needed. In the final iterations of the engine, typical frame had about 100 tasks, and some more could be spawned by loading data and assets, but it never was a problem.
+
+Tracy was used as a profiler, and, with manual code instrumentation, it showed what was going on in this system.
+
+![Overview of many frames](tracy_1.png)
+![A single frame](tracy_2.png)
+
+ImGui
+----
+ImGui was integrated for in-engine tooling, including settings, and scene control, i.e. loading/unloading of assets. Here, a picture will tell more than a thousand words:
+
+![All relevant tools shown](imgui.png)
+
+For integration, the ImGui GLFW Vulkan example code was adapted to work within the engine.
+
+
+CSG
+----
+This was one of the last major subprojects. The goal was to generate complex geometry from mathematical descriptions, namely, signed distance fields. This was inspired by the popular ShaderToy, but here I tried to use actual triangular meshes. First, the Marching Cubes algorithm was used, but it had major problems like seams and bad handing of smooth faces. Dual Contouring proved to be much more robust and also did output less vertices. Essentially, for each cube in a rectangular grid:
+- All input function's sign changes along the cube's edges are found
+- For each such edge, a point corresponding to output of zero is approximated
+- And also, it's surface normal
+- And finally, all of them are red into a QEF (Quadratic Error Function) solver, to output one point per cube, which is then used in the mesh.
+
+![Dual-Contouring-generated objects](csg_objects.jpg)
+
+This gives excellent results, allowing both sharp and smooth edges. I think an artist could do a lot with this system, however, with my limited creative talent, I only took it as far as I had to prove that it worked well.
+
+Conclusion
+===
+
+I'd like to end this description with some personal notes. First, there's a lot more detail to tell; however, I'm not sure that would be of great use to anyone, and so I tried to keep it short. Those in the know might appreciate the work required, and other people will only look at the screenshots anyway... 
+
+All of this this took _a lot_ of my time, being close to a full-time job for several months. Sometimes I gave myself breathers, but mostly I just knew I wanted to do this kind of project for many years, and having an excellent personal opportunity to do so, I did.
+
+I don't claim to now be a real-time rendering expert, however, I think this project should hopefully at least qualify me as competent. Depending on when you read this, I might, or might not be looking for a job in the industry.
+
+I appreciate if you made it to the end, and if you have any remarks or questions you can always contact me at *tempname011 at gmail dot com*.
+
+<!-- Markdeep: -->
+<style class="fallback">body{visibility:hidden}</style>
+<style class="fallback">body{white-space:pre}</style>
+<style class="fallback">body{font-family:monospace}</style>
+<script src="markdeep.min.js"></script>
+<script src="https://casual-effects.com/markdeep/latest/markdeep.min.js?">
+</script><script>window.alreadyProcessedMarkdeep
+||(document.body.style.visibility="visible")</script>
