@@ -4,8 +4,6 @@ title: "Index"
 permalink: /
 ---
 
-<ul>
-  <li>
-    <a href="/posts">All Posts</a>
-  </li>
-</ul>
+<a href="/posts">Blog Posts</a>
+<a href="/2021">2021</a>
+<a href="/about">About</a>
