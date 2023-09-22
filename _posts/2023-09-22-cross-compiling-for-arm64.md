@@ -43,7 +43,7 @@ set(CMAKE_C_COMPILER clang)
 set(CMAKE_CXX_COMPILER clang++)
 ```
 
-The GitHub Actions runner [windows-2022](https://github.com/actions/runner-images/blob/main/images/macos/macos-12-Readme.md) had the `ARM64` build tools installed already, although the packages listed there have a different naming scheme - I think `Microsoft.VisualStudio.Component.VC.Tools.ARM64` is the one.
+The GitHub Actions runner [windows-2022](https://github.com/actions/runner-images/blob/main/images/win/Windows2022-Readme.md) had the `ARM64` build tools installed already, although the packages listed there have a different naming scheme - I think `Microsoft.VisualStudio.Component.VC.Tools.ARM64` is the one.
 
 Since I am using Clang, I also have to select Ninja as the build generator, but that's true for non-cross builds as well.
 
