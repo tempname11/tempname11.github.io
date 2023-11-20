@@ -7,7 +7,7 @@ permalink: /posts/lessons-learned
 
 # Lessons Learned
 
-I recently have spent considerable time on https://github.com/tempname11/svf. It was a worthwhile experience, even if conservatively assuming that the library will not get any kind of widespread usage or popularity. I am pretty happy with the technical work that I put into it, but at the same time I can clearly see that just writing code, even good code, is simply not enough.
+I recently have spent considerable time on [https://github.com/tempname11/svf](https://github.com/tempname11/svf). It was a worthwhile experience, even if conservatively assuming that the library will not get any kind of widespread usage or popularity. I am pretty happy with the technical work that I put into it, but at the same time I can clearly see that just writing code, even good code, is simply not enough.
 
 I made a decision early on to work on the library with very little feedback. And I literally did no communication activities, aside from:
 
